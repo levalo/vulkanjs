@@ -3,6 +3,7 @@ import { GLSL } from 'nvk-essentials';
 import fs from 'fs';
 import { mat4, quat, vec3 } from 'gl-matrix';
 import { PNG } from 'pngjs';
+import { VkMappedMemoryRange, vkFlushMappedMemoryRanges } from 'nvk/generated/1.1.126/win32';
 
 Object.assign(global, nvk);
 
@@ -608,7 +609,7 @@ export default function vulkanProvider() {
 
                 vkCmdBindDescriptorSets(x, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 2, 1, 
                     [ modelDescriptorSet ], 
-                1, new Uint32Array([ j * y.model.byteLength ]));
+                1, new Uint32Array([ y.byteOffset ]));
 
                 vkCmdDrawIndexed(x, buffers[y.indexBuffer].size, 1, 0, 0, 0);
             });
@@ -863,22 +864,26 @@ export default function vulkanProvider() {
         endCommandBuffer(commandBuffer);
     }
 
-    const copyData = (dstMemo, size, data, viewProvider) => {
+    const copyData = (dstMemo, size, data, viewProvider, offset = 0) => {
         const dataPtr = { $: 0n };
         vkMapMemory(device, dstMemo, 0, size, 0, dataPtr);
 
         let address = ArrayBuffer.fromAddress(dataPtr.$, size);
         let view = new viewProvider(address);
-        for (let i = 0; i < data.length; i++) {
-            view[i] = data[i];
+        for (let i = offset; i < offset + data.length; i++) {
+            view[i] = data[i - offset];
         }
-        
+
         vkUnmapMemory(device, dstMemo);
     }
 
     const createAsset = ({ indexBuffer, vertexBuffer, texture, position, rotation, scale }) => {
         const model = computeModelMatrix({ position, rotation, scale });
-        const asset = { indexBuffer, vertexBuffer, texture, position, rotation, scale, model };
+        const asset = { 
+            indexBuffer, vertexBuffer, texture, position, rotation, scale, model, 
+            byteOffset: assets.length * model.byteLength,
+            offset: assets.length * model.length
+        };
 
         assets.push(asset);
 
@@ -886,9 +891,9 @@ export default function vulkanProvider() {
     }
 
     const updateAsset = (asset) => {
-        const model = computeModelMatrix(asset);
-
-        updateUniformBuffer(asset.modelBuffer, model);
+        asset.model = computeModelMatrix(asset);
+        
+        updateDynamicUniformBuffer(modelBuffer, asset.model, asset.offset);
     }
 
     const updateUniformBuffer = (bufferIndex, data) => {
@@ -896,6 +901,12 @@ export default function vulkanProvider() {
         const bufferMemory = buffers[bufferIndex].bufferMemory;
         
         copyData(bufferMemory, bufferSize, data, Float32Array);
+    }
+
+    const updateDynamicUniformBuffer = (bufferIndex, data, offset) => {
+        const { bufferSize, bufferMemory } = buffers[bufferIndex];
+
+        copyData(bufferMemory, bufferSize, data, Float32Array, offset);
     }
 
     const createProjectionMatrix = () => {

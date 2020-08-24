@@ -14,6 +14,14 @@ let asset = createAsset({
     position: { x: 0, y: 0, z: 1 }
 });
 
+let asset2 = createAsset({
+    vertexBuffer: asset.vertexBuffer,
+    indexBuffer: asset.indexBuffer,
+    texture: asset.texture,
+    rotation: { x: 0, y: 0, z: 0 },
+    position: { x: -2, y: 0, z: 1 }
+});
+
 initDescriptors();
 
 recreateSwapchain();
@@ -23,8 +31,11 @@ window.focus();
 const loop = setInterval(() => {
     window.pollEvents();
 
-    // asset.rotation.y += 0.1;
-    // updateAsset(asset);
+    asset.rotation.y += 0.1;
+    updateAsset(asset);
+
+    asset2.rotation.x += 0.1;
+    updateAsset(asset2);
 
     if (window.shouldClose()) {
         clearInterval(loop);
