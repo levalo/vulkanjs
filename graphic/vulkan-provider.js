@@ -3,7 +3,6 @@ import { GLSL } from 'nvk-essentials';
 import fs from 'fs';
 import { mat4, quat, vec3 } from 'gl-matrix';
 import { PNG } from 'pngjs';
-import { VkDescriptorPool, VkDescriptorSetLayout, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, VkDescriptorPoolSize, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VkResult, VK_WHOLE_SIZE, VkDescriptorBufferInfo, VkDescriptorSet } from 'nvk/generated/1.1.126/win32';
 
 Object.assign(global, nvk);
 
@@ -1337,13 +1336,6 @@ export default function vulkanProvider() {
     window.onresize = () => {
         frameBufferResized = true;
     }
-    
-    // const memProperties = new VkPhysicalDeviceMemoryProperties();
-    // vkGetPhysicalDeviceMemoryProperties(physicalDevice, memProperties);
-    // console.log("memory heaps:");
-    // memProperties.memoryHeaps.forEach((x, i) => console.log(i, ": ", x.size, x.flags));
-    // console.log("memory types: ");
-    // memProperties.memoryTypes.forEach((x, i) => console.log(i, ": ", x.heapIndex, x.propertyFlags));
 
     return {
         window,
