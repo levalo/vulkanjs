@@ -17,5 +17,6 @@ layout(location = 0) out vec2 texel;
 
 void main() {
     gl_Position = ubo.proj * ubo.view * a.model * vec4(inPosition, 1.0);
+    gl_Position.z = 0.0;
     texel = inTexel;
 }

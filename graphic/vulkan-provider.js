@@ -1,9 +1,8 @@
 import nvk from 'nvk';
 import { GLSL } from 'nvk-essentials';
-import fs from 'fs';
+import fs from "fs";
 import { mat4, quat, vec3 } from 'gl-matrix';
 import { PNG } from 'pngjs';
-import { VkMappedMemoryRange, vkFlushMappedMemoryRanges } from 'nvk/generated/1.1.126/win32';
 
 Object.assign(global, nvk);
 
@@ -58,6 +57,9 @@ export default function vulkanProvider() {
     let assetsDescriptorPool = new VkDescriptorPool();
     let modelBuffer = 0;
     let modelDescriptorSet = new VkDescriptorSet();
+    let depthImage = new VkImage();
+    let depthImageMemory = new VkDeviceMemory();
+    let depthImageView = new VkImageView();
     
     const createInstance = () => {
         const appCreateInfo = new VkApplicationInfo({
@@ -312,8 +314,7 @@ export default function vulkanProvider() {
                 binding: 2,
                 descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
                 descriptorCount: 1,
-                stageFlags: VK_SHADER_STAGE_VERTEX_BIT,
-                pImmutableSamplers: null
+                stageFlags: VK_SHADER_STAGE_VERTEX_BIT
             })
         ];
 
@@ -323,7 +324,7 @@ export default function vulkanProvider() {
         });
 
         if (vkCreateDescriptorSetLayout(device, assetsDescriptorSetLayoutCreateInfo, null, assetsDescriptorSetLayout) !== VkResult.VK_SUCCESS) {
-            throw 'Failed to create textures descriptor set layout!';
+            throw 'Failed to create assets descriptor set layout!';
         }
 
         const bindingDescriptions = [
@@ -440,7 +441,7 @@ export default function vulkanProvider() {
             setLayoutCount: 3,
             pSetLayouts: [ uniformDescriptorSetLayout, texturesDescriptorSetLayout, assetsDescriptorSetLayout ],
             pushConstantRangeCount: 0,
-            pPushConstantRanges: null,
+            pPushConstantRanges: null
         });
 
         if (vkCreatePipelineLayout(device, pipelineLayoutInfo, null, pipelineLayout) !== VkResult.VK_SUCCESS) {
@@ -450,6 +451,16 @@ export default function vulkanProvider() {
         const dynamicStateInfo = new VkPipelineDynamicStateCreateInfo({
             dynamicStateCount: 2,
             pDynamicStates: new Int32Array(dynamicStates)
+        });
+
+        const depthStencilInfo = new VkPipelineDepthStencilStateCreateInfo({
+            depthTestEnable: true,
+            depthWriteEnable: true,
+            depthCompareOp: VK_COMPARE_OP_LESS,
+            depthBoundsTestEnable: false,
+            minDepthBounds: 0.0,
+            maxDepthBounds: 1.0,
+            stencilTestEnable: false
         });
 
         const graphicsPipelineInfo = new VkGraphicsPipelineCreateInfo({
@@ -466,13 +477,14 @@ export default function vulkanProvider() {
             subpass: 0,
             basePipelineHandle: null,
             basePipelineIndex: -1,
+            pDepthStencilState: depthStencilInfo
             //pDynamicState: dynamicStateInfo
         });
 
         if (vkCreateGraphicsPipelines(device, null, 1, [ graphicsPipelineInfo ], null, [ graphicsPipeline ]) !== VkResult.VK_SUCCESS) {
             throw 'Failed to create graphics pipeline!';
         }
-
+        
         vkDestroyShaderModule(device, vertShader, null);
         vkDestroyShaderModule(device, fragShader, null);
     }
@@ -494,10 +506,27 @@ export default function vulkanProvider() {
             layout: VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         });
 
+        const depthAttachment = new VkAttachmentDescription({
+            format: findDepthFormat(),
+            samples: VK_SAMPLE_COUNT_1_BIT,
+            loadOp: VK_ATTACHMENT_LOAD_OP_CLEAR,
+            storeOp: VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            stencilLoadOp: VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            stencilStoreOp: VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
+            finalLayout: VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        });
+
+        const depthAttachmentRef = new VkAttachmentReference({
+            attachment: 1,
+            layout: VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        });
+
         const subPass = new VkSubpassDescription({
             pipelineBindPoint: VK_PIPELINE_BIND_POINT_GRAPHICS,
             colorAttachmentCount: 1,
-            pColorAttachments: [ colorAttachmentRef ]
+            pColorAttachments: [ colorAttachmentRef ],
+            pDepthStencilAttachment: depthAttachmentRef
         });
 
         const subPassDependency = new VkSubpassDependency({
@@ -510,8 +539,8 @@ export default function vulkanProvider() {
         });
 
         const renderPassInfo = new VkRenderPassCreateInfo({
-            attachmentCount: 1,
-            pAttachments: [colorAttachment],
+            attachmentCount: 2,
+            pAttachments: [colorAttachment, depthAttachment],
             subpassCount: 1,
             pSubpasses: [subPass],
             dependencyCount: 1,
@@ -529,8 +558,8 @@ export default function vulkanProvider() {
         imageViews.forEach((x, i) => {
             const frameBufferInfo = new VkFramebufferCreateInfo({
                 renderPass: renderPass,
-                attachmentCount: 1,
-                pAttachments: [ x ],
+                attachmentCount: 2,
+                pAttachments: [ x, depthImageView ],
                 width: swapchainExtent.width,
                 height: swapchainExtent.height,
                 layers: 1
@@ -580,13 +609,19 @@ export default function vulkanProvider() {
             }
 
             const clearColor = new VkClearValue();
-            clearColor.color.float32 = [ 1.0, 1.0, 0.0, 1.0 ];
+            clearColor.color.float32 = [ 1.0, 1.0, 1.0, 1.0 ];
+
+            const clearDepth = new VkClearValue();
+            clearDepth.depthStencil = new VkClearDepthStencilValue({
+                depth: 1.0,
+                stencil: 0
+            });
 
             const renderPassBeginInfo = new VkRenderPassBeginInfo({
                 renderPass: renderPass,
                 framebuffer: swapchainFramebuffers[i],
-                clearValueCount: 1,
-                pClearValues: [clearColor],
+                clearValueCount: 2,
+                pClearValues: [clearColor, clearDepth],
                 renderArea: new VkRect2D({
                     offset: new VkOffset2D({
                         x: 0,
@@ -715,6 +750,7 @@ export default function vulkanProvider() {
 
         createSwapchain();
         createImageViews();
+        createDepthResource();
         createRenderPass();
         createGraphicsPipeline();
         createFrameBuffers();
@@ -734,6 +770,8 @@ export default function vulkanProvider() {
         vkDestroyRenderPass(device, renderPass, null);
 
         imageViews.forEach(x => vkDestroyImageView(device, x, null));
+
+        vkDestroyImageView(device, depthImageView, null);
 
         vkDestroySwapchainKHR(device, swapchain, null);
 
@@ -912,10 +950,12 @@ export default function vulkanProvider() {
     const createProjectionMatrix = () => {
         const aspect = swapchainExtent.width / swapchainExtent.height;
         const zNear = 0.1;
-        const zFar = 100.0;
-        const fov = 45;
+        const zFar = 4096.0;
+        const fov = 45 * Math.PI / 180;
 
         mat4.perspective(projectionMatrix, fov, aspect, zNear, zFar);
+
+        projectionMatrix[5] *= -1.0;
     }
 
     const createViewMatrix = ({ position = {x: 0, y: 0, z: 0}, target = {x: 0, y: 0, z: 0} }) => {
@@ -1050,7 +1090,7 @@ export default function vulkanProvider() {
         const bufferInfo = new VkDescriptorBufferInfo({
             buffer: buffers[modelBuffer].buffer,
             offset: 0,
-            range: mat4.create().byteLength
+            range: VK_WHOLE_SIZE
         });
 
         const descriptorWriter = new VkWriteDescriptorSet({
@@ -1061,7 +1101,7 @@ export default function vulkanProvider() {
             descriptorCount: 1,
             pBufferInfo: [ bufferInfo ]
         });
-
+        
         vkUpdateDescriptorSets(device, 1, [ descriptorWriter ], 0, null);
     }
 
@@ -1081,7 +1121,7 @@ export default function vulkanProvider() {
         return descriptorSets;
     }
 
-    const createImageView = (image, format) => {
+    const createImageView = (image, format, aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT) => {
         const imageViewCreateInfo = new VkImageViewCreateInfo({
             viewType: VK_IMAGE_VIEW_TYPE_2D,
             components: new VkComponentMapping({
@@ -1091,7 +1131,7 @@ export default function vulkanProvider() {
                 a: VK_COMPONENT_SWIZZLE_IDENTITY
             }),
             subresourceRange: new VkImageSubresourceRange({
-                aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
+                aspectMask: aspectFlags,
                 baseMipLevel: 0,
                 levelCount: 1,
                 baseArrayLayer: 0,
@@ -1215,7 +1255,7 @@ export default function vulkanProvider() {
 
     const transitionImageLayout = (image, format, oldLayout, newLayout) => {
         const commandBuffer = beginCommandBuffer();
-
+        
         const barrier = new VkImageMemoryBarrier({
             srcQueueFamilyIndex: VK_QUEUE_FAMILY_IGNORED,
             dstQueueFamilyIndex: VK_QUEUE_FAMILY_IGNORED,
@@ -1233,6 +1273,14 @@ export default function vulkanProvider() {
             newLayout
         });
 
+        if (newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            
+            if (hasStencilComponent(format)) {
+                barrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+        }
+
         let sourceStage = 0;
         let destinationStage = 0;
 
@@ -1249,7 +1297,14 @@ export default function vulkanProvider() {
 
             sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
             destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        } 
+        }
+        else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        
+            sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        }
         else {
             throw 'unsupported layout transition!';
         }
@@ -1313,11 +1368,30 @@ export default function vulkanProvider() {
         }
     }
 
+    const createDepthResource = () => {
+        const depthFormat = findDepthFormat();
+        
+        createImage(swapchainExtent.width, swapchainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
+        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+        
+        transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    }
+
+    const findDepthFormat = () => {
+        return findSupportedFormat(
+            physicalDevice, 
+            [ VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT ],
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+        );
+    }
+
     const initDescriptors = () => {
         createTexturesDescriptorPool();
         createTexturesDescriptorSets();
 
         const data = new Float32Array(assets.reduce((acc, x) => [...acc, ...x.model], []));
+        
         modelBuffer = createUniformBuffer(data, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 
         createAssetsDescriptorPool();
@@ -1329,8 +1403,10 @@ export default function vulkanProvider() {
     createSurface();
     createPhysicalDevice();
     createDevice();
+    createCommandPool();
     createSwapchain();
     createImageViews();
+    createDepthResource();
     createRenderPass();
     createGraphicsPipeline();
     createFrameBuffers();
@@ -1339,7 +1415,6 @@ export default function vulkanProvider() {
     createUniformBuffers();
     createUniformDescriptorPool();
     createUniformDescriptorSets();
-    createCommandPool();
     createCommandBuffers();
     createSyncObjects();
     createTextureSampler();
@@ -1393,6 +1468,27 @@ export function readtexture(path) {
 
         throw `Failed to read texture: ${path}`;
     }
+}
+
+function findSupportedFormat(physicalDevice, canditates, tiling, features) {
+    for(let i = 0; i < canditates.length; i++) {
+        const format = canditates[i];
+        const properties = new VkFormatProperties();
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, format, properties);
+        
+        if (tiling === VK_IMAGE_TILING_LINEAR && (properties.linearTilingFeatures & features) == features) {
+            return format;
+        } 
+        else if (tiling === VK_IMAGE_TILING_OPTIMAL && (properties.optimalTilingFeatures & features) == features) {
+            return format;
+        }
+    }
+    
+    throw 'Failed to find supported format!';
+}
+
+function hasStencilComponent(format) {
+    return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
 }
 
 function readShader(path, type) {
