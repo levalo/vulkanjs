@@ -339,7 +339,7 @@ export default function vulkanProvider() {
             new VkVertexInputAttributeDescription({
                 binding: 0,
                 location: 0,
-                format: VK_FORMAT_R32G32_SFLOAT,
+                format: VK_FORMAT_R32G32B32_SFLOAT,
                 offset: 0
             }),
             new VkVertexInputAttributeDescription({
@@ -637,7 +637,7 @@ export default function vulkanProvider() {
             
             assets.forEach((y, j) => {
                 vkCmdBindVertexBuffers(x, 0, 1, [ buffers[y.vertexBuffer].buffer ], new BigUint64Array([ 0n ]));
-                vkCmdBindIndexBuffer(x, buffers[y.indexBuffer].buffer, 0, VK_INDEX_TYPE_UINT16);
+                vkCmdBindIndexBuffer(x, buffers[y.indexBuffer].buffer, 0n, VK_INDEX_TYPE_UINT16);
                 vkCmdBindDescriptorSets(x, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 2, 
                     [ uniformDescriptorSets[i], textures[y.texture].descriptorSet ], 
                 0, null);
@@ -803,7 +803,7 @@ export default function vulkanProvider() {
         const bufferMemory = new VkDeviceMemory();
 
         createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, properties, buffer, bufferMemory);
-        copyData(bufferMemory, bufferSize, data, Float32Array);
+        copyData(bufferMemory, bufferSize, data);
 
         return buffers.push({ buffer, bufferMemory, size: data.length, bufferSize }) - 1;
     }
@@ -823,7 +823,7 @@ export default function vulkanProvider() {
         const stagingBuffer = new VkBuffer();
         const stagingBufferMemory = new VkDeviceMemory();
         createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-        copyData(stagingBufferMemory, bufferSize, vertices, Float32Array);
+        copyData(stagingBufferMemory, bufferSize, vertices);
 
         const buffer = new VkBuffer();
         const bufferMemory = new VkDeviceMemory();
@@ -847,7 +847,7 @@ export default function vulkanProvider() {
         const stagingBuffer = new VkBuffer();
         const stagingBufferMemory = new VkDeviceMemory();
         createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-        copyData(stagingBufferMemory, bufferSize, indeces, Uint16Array);
+        copyData(stagingBufferMemory, bufferSize, indeces);
 
         const buffer = new VkBuffer();
         const bufferMemory = new VkDeviceMemory();
@@ -902,14 +902,16 @@ export default function vulkanProvider() {
         endCommandBuffer(commandBuffer);
     }
 
-    const copyData = (dstMemo, size, data, viewProvider, offset = 0) => {
+    const copyData = (dstMemo, byteLen, data, byteOffset = 0) => {
         const dataPtr = { $: 0n };
-        vkMapMemory(device, dstMemo, 0, size, 0, dataPtr);
+        vkMapMemory(device, dstMemo, 0n, byteLen, 0, dataPtr);
 
-        let address = ArrayBuffer.fromAddress(dataPtr.$, size);
-        let view = new viewProvider(address);
-        for (let i = offset; i < offset + data.length; i++) {
-            view[i] = data[i - offset];
+        let address = ArrayBuffer.fromAddress(dataPtr.$, byteLen);
+        let srcBuffer = data.buffer;
+        let src = new Uint8Array(srcBuffer);
+        let view = new Uint8Array(address);
+        for (let i = byteOffset; i < src.length + byteOffset; ++i) {
+            view[i] = src[i - byteOffset];
         }
 
         vkUnmapMemory(device, dstMemo);
@@ -931,20 +933,20 @@ export default function vulkanProvider() {
     const updateAsset = (asset) => {
         asset.model = computeModelMatrix(asset);
         
-        updateDynamicUniformBuffer(modelBuffer, asset.model, asset.offset);
+        updateDynamicUniformBuffer(modelBuffer, asset.model, asset.byteOffset);
     }
 
     const updateUniformBuffer = (bufferIndex, data) => {
         const bufferSize = data.byteLength;
         const bufferMemory = buffers[bufferIndex].bufferMemory;
         
-        copyData(bufferMemory, bufferSize, data, Float32Array);
+        copyData(bufferMemory, bufferSize, data);
     }
 
-    const updateDynamicUniformBuffer = (bufferIndex, data, offset) => {
+    const updateDynamicUniformBuffer = (bufferIndex, data, byteOffset) => {
         const { bufferSize, bufferMemory } = buffers[bufferIndex];
 
-        copyData(bufferMemory, bufferSize, data, Float32Array, offset);
+        copyData(bufferMemory, bufferSize, data, byteOffset);
     }
 
     const createProjectionMatrix = () => {
@@ -954,8 +956,6 @@ export default function vulkanProvider() {
         const fov = 45 * Math.PI / 180;
 
         mat4.perspective(projectionMatrix, fov, aspect, zNear, zFar);
-
-        projectionMatrix[5] *= -1.0;
     }
 
     const createViewMatrix = ({ position = {x: 0, y: 0, z: 0}, target = {x: 0, y: 0, z: 0} }) => {
@@ -1156,7 +1156,7 @@ export default function vulkanProvider() {
         const stagingBuffer = new VkBuffer();
         const stagingBufferMemory = new VkDeviceMemory();
         createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-        copyData(stagingBufferMemory, bufferSize, img.data, Uint8Array);
+        copyData(stagingBufferMemory, bufferSize, img.data);
 
         const textureImage = new VkImage();
         const textureImageMemory = new VkDeviceMemory();
