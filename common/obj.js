@@ -63,6 +63,10 @@ export function Obj(path) {
         mergedVertices.push(resultVertices[i + 1]);
         mergedVertices.push(resultVertices[i + 2]);
 
+        mergedVertices.push(resultNormals[i]);
+        mergedVertices.push(resultNormals[i + 1]);
+        mergedVertices.push(resultNormals[i + 2]);
+
         mergedVertices.push(resultTexels[j]);
         mergedVertices.push(resultTexels[j + 1]);
         

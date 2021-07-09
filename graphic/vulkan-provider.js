@@ -3,6 +3,7 @@ import { GLSL } from 'nvk-essentials';
 import fs from "fs";
 import { mat4, quat, vec3 } from 'gl-matrix';
 import { PNG } from 'pngjs';
+import { vkCmdBlitImage, vkCmdPipelineBarrier, VkImageBlit, VkImageSubresourceLayers, VkImageSubresourceRange, VkOffset3D, VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_FILTER_LINEAR, VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_QUEUE_FAMILY_IGNORED, VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER } from 'nvk/generated/1.1.126/win32';
 
 Object.assign(global, nvk);
 
@@ -60,7 +61,12 @@ export default function vulkanProvider() {
     let depthImage = new VkImage();
     let depthImageMemory = new VkDeviceMemory();
     let depthImageView = new VkImageView();
-    
+    let objects = [];
+    let verticesBuffer = 0;
+    let indicesBuffer = 0;
+    let maxMipLevels = 12;
+    let minMipLevel = 0;
+
     const createInstance = () => {
         const appCreateInfo = new VkApplicationInfo({
             pApplicationName: 'example',
@@ -250,7 +256,7 @@ export default function vulkanProvider() {
         imageViews = new Array(swapchainImages.length).fill(null).map(x => new VkImageView());
 
         swapchainImages.forEach((x, i) => {
-            imageViews[i] = createImageView(x, swapchainImageFormat);
+            imageViews[i] = createImageView(x, swapchainImageFormat, 1);
         });
     }
 
@@ -274,16 +280,18 @@ export default function vulkanProvider() {
             })
         ];
 
-        const uniformDescriptorSetLayoutBindings = new VkDescriptorSetLayoutBinding({
-            binding: 0,
-            descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            descriptorCount: 1,
-            stageFlags: VK_SHADER_STAGE_VERTEX_BIT
-        });
+        const uniformDescriptorSetLayoutBindings = [
+            new VkDescriptorSetLayoutBinding({
+                binding: 0,
+                descriptorType: VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                descriptorCount: 1,
+                stageFlags: VK_SHADER_STAGE_VERTEX_BIT
+            })
+        ];
     
         const uniformDescriptorSetLayoutCreateInfo = new VkDescriptorSetLayoutCreateInfo({
-            bindingCount: 1,
-            pBindings: [ uniformDescriptorSetLayoutBindings ]
+            bindingCount: uniformDescriptorSetLayoutBindings.length,
+            pBindings: uniformDescriptorSetLayoutBindings
         });
 
         if (vkCreateDescriptorSetLayout(device, uniformDescriptorSetLayoutCreateInfo, null, uniformDescriptorSetLayout) !== VkResult.VK_SUCCESS) {
@@ -330,7 +338,7 @@ export default function vulkanProvider() {
         const bindingDescriptions = [
             new VkVertexInputBindingDescription({
                 binding: 0,
-                stride: 5 * Float32Array.BYTES_PER_ELEMENT,
+                stride: 8 * Float32Array.BYTES_PER_ELEMENT,
                 inputRate: VK_VERTEX_INPUT_RATE_VERTEX
             })
         ];
@@ -345,8 +353,14 @@ export default function vulkanProvider() {
             new VkVertexInputAttributeDescription({
                 binding: 0,
                 location: 1,
-                format: VK_FORMAT_R32G32_SFLOAT,
+                format: VK_FORMAT_R32G32B32_SFLOAT,
                 offset: 3 * Float32Array.BYTES_PER_ELEMENT
+            }),
+            new VkVertexInputAttributeDescription({
+                binding: 0,
+                location: 2,
+                format: VK_FORMAT_R32G32_SFLOAT,
+                offset: 6 * Float32Array.BYTES_PER_ELEMENT
             })
         ];
 
@@ -635,18 +649,24 @@ export default function vulkanProvider() {
 
             vkCmdBindPipeline(x, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
             
-            assets.forEach((y, j) => {
-                vkCmdBindVertexBuffers(x, 0, 1, [ buffers[y.vertexBuffer].buffer ], new BigUint64Array([ 0n ]));
-                vkCmdBindIndexBuffer(x, buffers[y.indexBuffer].buffer, 0n, VK_INDEX_TYPE_UINT16);
-                vkCmdBindDescriptorSets(x, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 2, 
-                    [ uniformDescriptorSets[i], textures[y.texture].descriptorSet ], 
-                0, null);
+            objects.forEach((object, j) => {
 
-                vkCmdBindDescriptorSets(x, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 2, 1, 
-                    [ modelDescriptorSet ], 
-                1, new Uint32Array([ y.byteOffset ]));
+                object.assets.forEach((assetIndex, k) => {
+                    const asset = assets[assetIndex];
+                    
+                    vkCmdBindVertexBuffers(x, 0, 1, [ buffers[verticesBuffer].buffer ], new BigUint64Array([ BigInt(object.verticesOffset) ]));
+                    vkCmdBindIndexBuffer(x, buffers[indicesBuffer].buffer, object.indicesOffset, VK_INDEX_TYPE_UINT16);
 
-                vkCmdDrawIndexed(x, buffers[y.indexBuffer].size, 1, 0, 0, 0);
+                    vkCmdBindDescriptorSets(x, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 2, 
+                        [ uniformDescriptorSets[i], textures[asset.texture].descriptorSet ], 
+                    0, null);
+
+                    vkCmdBindDescriptorSets(x, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 2, 1, 
+                        [ modelDescriptorSet ], 
+                    1, new Uint32Array([ asset.byteOffset ]));
+
+                    vkCmdDrawIndexed(x, object.indicesCount, object.assets.length, 0, 0, 0);
+                });
             });
 
             vkCmdEndRenderPass(x);
@@ -741,46 +761,6 @@ export default function vulkanProvider() {
         }
 
         currentFrame = (currentFrame + 1) % maxFramesInFlaight;
-    }
-
-    const recreateSwapchain = () => {
-        vkDeviceWaitIdle(device);
-
-        cleanupSwapchain();
-
-        createSwapchain();
-        createImageViews();
-        createDepthResource();
-        createRenderPass();
-        createGraphicsPipeline();
-        createFrameBuffers();
-        createProjectionMatrix();
-        createUniformBuffers();
-        createUniformDescriptorPool();
-        createUniformDescriptorSets();
-        createCommandBuffers();
-    }
-
-    const cleanupSwapchain = () => {
-        swapchainFramebuffers.forEach(x => vkDestroyFramebuffer(device, x, null));
-
-        vkFreeCommandBuffers(device, commandPool, commandBuffers.length, commandBuffers);
-        vkDestroyPipeline(device, graphicsPipeline, null);
-        vkDestroyPipelineLayout(device, pipelineLayout, null);
-        vkDestroyRenderPass(device, renderPass, null);
-
-        imageViews.forEach(x => vkDestroyImageView(device, x, null));
-
-        vkDestroyImageView(device, depthImageView, null);
-
-        vkDestroySwapchainKHR(device, swapchain, null);
-
-        uniformBuffers.forEach(x => {
-            vkDestroyBuffer(device, buffers[x].buffer, null);
-            vkFreeMemory(device, buffers[x].bufferMemory, null);
-        });
-
-        vkDestroyDescriptorPool(device, uniformDescriptorPool, null);
     }
 
     const createShaderModule = (shaderCode) => {
@@ -917,15 +897,45 @@ export default function vulkanProvider() {
         vkUnmapMemory(device, dstMemo);
     }
 
-    const createAsset = ({ indexBuffer, vertexBuffer, texture, position, rotation, scale }) => {
+    const createObjects = (data) => {
+        const vertices = new Float32Array(data.reduce((acc, x) => acc + x.vertices.length, 0));
+        const indices = new Uint16Array(data.reduce((acc, x) => acc + x.indices.length, 0));
+
+        data.forEach((x, i) => { 
+            
+            const object = {
+                index: i,
+                name: x.name,
+                verticesOffset: x.vertices.byteLength * i,
+                verticesCount: x.vertices.length,
+                verticesSize: x.vertices.byteLength,
+                indicesOffset: x.indices.byteLength * i,
+                indicesCount: x.indices.length,
+                indicesSize: x.indices.byteLength,
+                assets: []
+            };
+
+            objects.push(object);
+            vertices.set(x.vertices);
+            indices.set(x.indices);
+        });
+
+        verticesBuffer = createVertexBuffer(vertices);
+        indicesBuffer = createIndexBuffer(indices);
+    }
+
+    const createAsset = ({ objectName, texture, position, rotation, scale }) => {
         const model = computeModelMatrix({ position, rotation, scale });
+        const objectIndex = objects.findIndex(x => x.name === objectName);
         const asset = { 
-            indexBuffer, vertexBuffer, texture, position, rotation, scale, model, 
+            objectIndex, texture, position, rotation, scale, model, 
             byteOffset: assets.length * model.byteLength,
             offset: assets.length * model.length
         };
 
-        assets.push(asset);
+        const assetIndex = assets.push(asset) - 1;
+
+        objects[objectIndex].assets.push(assetIndex);
 
         return asset;
     }
@@ -1121,7 +1131,7 @@ export default function vulkanProvider() {
         return descriptorSets;
     }
 
-    const createImageView = (image, format, aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT) => {
+    const createImageView = (image, format, aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT, mipLevels) => {
         const imageViewCreateInfo = new VkImageViewCreateInfo({
             viewType: VK_IMAGE_VIEW_TYPE_2D,
             components: new VkComponentMapping({
@@ -1133,7 +1143,7 @@ export default function vulkanProvider() {
             subresourceRange: new VkImageSubresourceRange({
                 aspectMask: aspectFlags,
                 baseMipLevel: 0,
-                levelCount: 1,
+                levelCount: mipLevels,
                 baseArrayLayer: 0,
                 layerCount: 1
             }),
@@ -1151,6 +1161,7 @@ export default function vulkanProvider() {
 
     const createTextureImage = (imgPath) => {
         const img = readtexture(imgPath);
+        const mipLevels = Math.floor(Math.log2(Math.max(img.width, img.height))) + 1;
 
         const bufferSize = img.byteLength;
         const stagingBuffer = new VkBuffer();
@@ -1160,16 +1171,17 @@ export default function vulkanProvider() {
 
         const textureImage = new VkImage();
         const textureImageMemory = new VkDeviceMemory();
-        createImage(img.width, img.height, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+        createImage(img.width, img.height, mipLevels, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
         
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
         copyBufferToImage(stagingBuffer, textureImage, img.width, img.height);
-        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, img.width, img.height, mipLevels);
+        transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
     
         vkDestroyBuffer(device, stagingBuffer, null);
         vkFreeMemory(device, stagingBufferMemory, null);
 
-        const textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB);
+        const textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, mipLevels);
         
         const imageIndex = textures.push({ 
             image: textureImage, 
@@ -1183,7 +1195,7 @@ export default function vulkanProvider() {
         return imageIndex;
     }
 
-    const createImage = (width, height, format, tiling, usage, properties, image, imageMemory) => {
+    const createImage = (width, height, mipLevels, format, tiling, usage, properties, image, imageMemory) => {
         const imageInfo = new VkImageCreateInfo({
             imageType: VK_IMAGE_TYPE_2D,
             extent: new VkExtent3D({
@@ -1196,6 +1208,7 @@ export default function vulkanProvider() {
             initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
             samples: VK_SAMPLE_COUNT_1_BIT,
             sharingMode: VK_SHARING_MODE_EXCLUSIVE,
+            mipLevels,
             format,
             tiling,
             usage
@@ -1218,6 +1231,104 @@ export default function vulkanProvider() {
         }
 
         vkBindImageMemory(device, image, imageMemory, 0);
+    }
+
+    const generateMipmaps = (image, imageFormat, texWidth, texHeight, mipLevels) => {
+        const properties = new VkFormatProperties();
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, properties);
+
+        if(!(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
+            throw new Error('Texture image format does not support linear blitting!');
+        }
+
+        const commandBuffer = beginCommandBuffer();
+
+        const barrier = new VkImageMemoryBarrier({
+            sType: VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            srcQueueFamilyIndex: VK_QUEUE_FAMILY_IGNORED,
+            dstQueueFamilyIndex: VK_QUEUE_FAMILY_IGNORED,
+            subresourceRange: new VkImageSubresourceRange({
+                aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
+                baseArrayLayer: 0,
+                layerCount: 1,
+                levelCount: 1
+            }),
+            image
+        });
+
+        let mipWidth = texWidth;
+        let mipHeight = texHeight;
+
+        for(let i = 1; i < mipLevels; i++) {
+            barrier.subresourceRange.baseMipLevel = i - 1;
+            barrier.subresourceRange.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.subresourceRange.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.subresourceRange.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.subresourceRange.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, [ barrier ]);
+
+            const blit = new VkImageBlit({
+                srcOffsets: [
+                    new VkOffset3D({
+                        x: 0,
+                        y: 0,
+                        z: 0
+                    }),
+                    new VkOffset3D({
+                        x: mipWidth,
+                        y: mipHeight,
+                        z: 1
+                    })
+                ],
+                srcSubresource: new VkImageSubresourceLayers({
+                    aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
+                    mipLevel: i - 1,
+                    baseArrayLayer: 0,
+                    layerCount: 1
+                }),
+                dstOffsets: [
+                    new VkOffset3D({
+                        x: 0,
+                        y: 0,
+                        z: 0
+                    }),
+                    new VkOffset3D({
+                        x: mipWidth > 1 ? mipWidth / 2 : 1,
+                        y: mipHeight > 1 ? mipHeight / 2 : 1,
+                        z: 1
+                    })
+                ],
+                dstSubresource: new VkImageSubresourceLayers({
+                    aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
+                    mipLevel: i,
+                    baseArrayLayer: 0,
+                    layerCount: 1
+                })
+            });
+
+            vkCmdBlitImage(commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, [ blit ], VK_FILTER_LINEAR);
+            
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, [ barrier ]);
+
+            if (mipWidth > 1) mipWidth /= 2;
+            if (mipHeight > 1) mipHeight /= 2;
+        }
+
+        barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, [ barrier ]);
+
+        endCommandBuffer(commandBuffer);
     }
 
     const beginCommandBuffer = () => {
@@ -1253,7 +1364,7 @@ export default function vulkanProvider() {
         vkFreeCommandBuffers(device, commandPool, 1, [ commandBuffer ]);
     }
 
-    const transitionImageLayout = (image, format, oldLayout, newLayout) => {
+    const transitionImageLayout = (image, format, oldLayout, newLayout, mipLevels) => {
         const commandBuffer = beginCommandBuffer();
         
         const barrier = new VkImageMemoryBarrier({
@@ -1262,7 +1373,7 @@ export default function vulkanProvider() {
             subresourceRange: new VkImageSubresourceRange({
                 aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
                 baseMipLevel: 0,
-                levelCount: 1,
+                levelCount: mipLevels,
                 baseArrayLayer: 0,
                 layerCount: 1
             }),
@@ -1359,8 +1470,8 @@ export default function vulkanProvider() {
             compareOp: VK_COMPARE_OP_ALWAYS,
             mipmapMode: VK_SAMPLER_MIPMAP_MODE_LINEAR,
             mipLodBias: 0,
-            minLod: 0,
-            maxLod: 0
+            minLod: minMipLevel,
+            maxLod: maxMipLevels
         });
 
         if (vkCreateSampler(device, samplerInfo, null, textureSampler) !== VkResult.VK_SUCCESS) {
@@ -1371,10 +1482,10 @@ export default function vulkanProvider() {
     const createDepthResource = () => {
         const depthFormat = findDepthFormat();
         
-        createImage(swapchainExtent.width, swapchainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+        createImage(swapchainExtent.width, swapchainExtent.height, 1, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
+        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
         
-        transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
     }
 
     const findDepthFormat = () => {
@@ -1398,41 +1509,86 @@ export default function vulkanProvider() {
         createAssetsDescriptorSets();
     }
 
+    const cleanupSwapchain = () => {
+        swapchainFramebuffers.forEach(x => vkDestroyFramebuffer(device, x, null));
+
+        vkFreeCommandBuffers(device, commandPool, commandBuffers.length, commandBuffers);
+        vkDestroyPipeline(device, graphicsPipeline, null);
+        vkDestroyPipelineLayout(device, pipelineLayout, null);
+        vkDestroyRenderPass(device, renderPass, null);
+
+        imageViews.forEach(x => vkDestroyImageView(device, x, null));
+
+        vkDestroyImageView(device, depthImageView, null);
+
+        vkDestroySwapchainKHR(device, swapchain, null);
+
+        uniformBuffers.forEach(x => {
+            vkDestroyBuffer(device, buffers[x].buffer, null);
+            vkFreeMemory(device, buffers[x].bufferMemory, null);
+        });
+
+        vkDestroyDescriptorPool(device, uniformDescriptorPool, null);
+    }
+
+    const recreateSwapchain = () => {
+        vkDeviceWaitIdle(device);
+
+        cleanupSwapchain();
+
+        createSwapchain();
+        createImageViews();
+        createDepthResource();
+        createRenderPass();
+        createGraphicsPipeline();
+        createFrameBuffers();
+        createProjectionMatrix();
+        createUniformBuffers();
+        createUniformDescriptorPool();
+        createUniformDescriptorSets();
+        createCommandBuffers();
+    }
+
+    const run = () => {
+        createSwapchain();
+        createImageViews();
+        createDepthResource();
+        createRenderPass();
+        createGraphicsPipeline();
+        createFrameBuffers();
+        createProjectionMatrix();
+        createViewMatrix({ position: { x: 0, y: 0.0, z: -3.0 }});
+        createUniformBuffers();
+        createUniformDescriptorPool();
+        createUniformDescriptorSets();
+        createSyncObjects();
+        createTextureSampler();
+        initDescriptors();
+        createCommandBuffers();
+
+        window.onresize = () => {
+            frameBufferResized = true;
+        }
+    }
+
     createInstance();
     setupDebugMessenger();
     createSurface();
     createPhysicalDevice();
     createDevice();
     createCommandPool();
-    createSwapchain();
-    createImageViews();
-    createDepthResource();
-    createRenderPass();
-    createGraphicsPipeline();
-    createFrameBuffers();
-    createProjectionMatrix();
-    createViewMatrix({ position: { x: 0, y: 0.0, z: -3.0 }});
-    createUniformBuffers();
-    createUniformDescriptorPool();
-    createUniformDescriptorSets();
-    createCommandBuffers();
-    createSyncObjects();
-    createTextureSampler();
-
-    window.onresize = () => {
-        frameBufferResized = true;
-    }
 
     return {
         window,
+        run,
         drawFrame,
         createVertexBuffer,
         createIndexBuffer,
         createTextureImage,
         recreateSwapchain,
         createAsset,
-        initDescriptors,
-        updateAsset
+        updateAsset,
+        createObjects
     }
 }
 
@@ -1459,7 +1615,7 @@ export function readtexture(path) {
         return {
             byteLength: data.byteLength,
             width: img.width, 
-            height: img.height, 
+            height: img.height,
             data
         }
     }
