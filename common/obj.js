@@ -74,10 +74,7 @@ export function Obj(path) {
     }
 
     return { 
-        vertices: new Float32Array(resultVertices), 
-        indices: new Uint16Array(resultIndeces),
-        texels: new Float32Array(resultTexels),
-        normals: new Float32Array(resultNormals),
-        mergedVertices: new Float32Array(mergedVertices)
+        vertices: new Float32Array(mergedVertices), 
+        indices: new Uint16Array(resultIndeces)
     };
 }

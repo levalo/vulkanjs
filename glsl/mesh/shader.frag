@@ -1,13 +1,18 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
+#extension GL_EXT_nonuniform_qualifier : require
 
-layout(set = 1, binding = 1) uniform sampler2D texSampler;
+layout(set = 3, binding = 0) uniform sampler2D texSampler[];
 
 layout(location = 0) in vec2 texel;
 layout(location = 1) in vec3 normal_cameraspace;
 layout(location = 2) in vec3 position_worldSpace;
 layout(location = 3) in vec3 eyeDirection_cameraspace;
 layout(location = 4) in vec3 lightDirection_cameraspace;
+
+layout(push_constant) uniform PushConstants {
+    int texture_index;
+} constants;
 
 layout(location = 0) out vec4 outColor;
 
@@ -37,7 +42,7 @@ void main() {
     //  - light is behind the triangle -> 0
     float cosTheta = clamp(dot(n, l), 0, 1);
 
-    vec4 tcolor = texture(texSampler, texel); //vec4(texel, 0.0, 1.0);
+    vec4 tcolor = texture(texSampler[nonuniformEXT(constants.texture_index)], texel); //vec4(texel, 0.0, 1.0);
 
     vec3 MaterialAmbientColor = vec3(0.1, 0.1, 0.1) * tcolor.rgb;
 

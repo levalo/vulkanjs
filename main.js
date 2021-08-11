@@ -1,40 +1,20 @@
-import vulkanProvider from './graphic/vulkan-provider';
-import { Obj } from './common/obj';
-
 global.debug = true;
 
-const { window, drawFrame, run, createAsset, createTextureImage, updateAsset, createObjects } = vulkanProvider();
-const { indices, mergedVertices } = Obj('models/barrel.obj');
+import { GraphicProvider } from './graphic/provider';
 
-createObjects([
-    { name: 'barrel', vertices: mergedVertices, indices: indices}
-]);
+const { updateCamera, createAsset, updateAsset, createLoop } = GraphicProvider();
 
-let barrelTexture = createTextureImage('textures/barrel_tx_base.png');
+updateCamera({ x: 0, y: 0.0, z: -0.1 });
 
 let asset = createAsset({
-    objectName: 'barrel',
-    texture: barrelTexture,
+    modelName: 'barrel.obj',
+    texture: 'empty.png',
     rotation: { x: 30, y: 0, z: 0 },
     position: { x: 0, y: 0, z: 7 }
 });
 
-run();
+let i = 1;
 
-window.focus();
-
-const loop = setInterval(() => {
-    window.pollEvents();
-
-    // asset.rotation.y += 0.1;
-    // asset.rotation.x += 0.1;
-    updateAsset(asset);
-
-    if (window.shouldClose()) {
-        clearInterval(loop);
-
-        return;
-    }
-
-    drawFrame();
-}, 1000 / 60);
+createLoop(() => {
+    //updateCamera({ x: 0, y: 0.0, z: ((i++) / 100) * -1 }, asset.position);
+});
